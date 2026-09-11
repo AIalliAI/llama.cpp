@@ -346,9 +346,11 @@ static void soft_max_f32_cuda(const float *                                x,
 
     dim3 block_nums(params.ne01, params.ne02, params.ne03);
 
+    // rowx is uint32_t in the kernel; abort before launch if nrows_x would wrap
+    GGML_ASSERT(params.nrows_x <= INT32_MAX);
+
     // gridDim.y/z are limited to 65535, put all rows in gridDim.x if they do not fit
     if (params.ne02 > UINT16_MAX || params.ne03 > UINT16_MAX) {
-        GGML_ASSERT(params.nrows_x <= INT32_MAX);
         block_nums = dim3(params.nrows_x, 1, 1);
     }
 
@@ -448,8 +450,8 @@ void ggml_cuda_op_soft_max(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     params.ne01 = src0->ne[1];
     params.ne02 = src0->ne[2];
     params.ne03 = src0->ne[3];
-    params.ne01_fd = init_fastdiv_values((uint32_t) src0->ne[1]);
-    params.ne02_fd = init_fastdiv_values((uint32_t) src0->ne[2]);
+    params.ne01_fd = init_fastdiv_values(src0->ne[1]);
+    params.ne02_fd = init_fastdiv_values(src0->ne[2]);
     params.nb11 = nb11;
     params.nb12 = nb12;
     params.nb13 = nb13;
