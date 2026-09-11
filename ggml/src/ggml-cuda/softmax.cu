@@ -33,6 +33,8 @@ struct soft_max_params {
     int64_t ne01;
     int64_t ne02;
     int64_t ne03;
+    uint3   ne01_fd;
+    uint3   ne02_fd;
     int64_t nb11;
     int64_t nb12;
     int64_t nb13;
@@ -58,12 +60,16 @@ static __global__ void soft_max_f32(
 
     const int tid  = threadIdx.x;
 
-    const int64_t i03 = blockIdx.z;
-    const int64_t i02 = blockIdx.y;
-    const int64_t i01 = blockIdx.x;
-
     //TODO: noncontigous inputs/outputs
-    const int rowx = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
+    const uint32_t rowx = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
+
+    // the grid is flat when ne02/ne03 do not fit in gridDim.y/z, so unravel the row index
+    const uint2 div_mod_01 = fast_div_modulo(rowx,         p.ne01_fd);
+    const uint2 div_mod_02 = fast_div_modulo(div_mod_01.x, p.ne02_fd);
+
+    const int64_t i01 = div_mod_01.y;
+    const int64_t i02 = div_mod_02.y;
+    const int64_t i03 = div_mod_02.x;
 
     const int64_t i11 = i01;
     const int64_t i12 = i02 % p.ne12;
@@ -337,7 +343,15 @@ static void soft_max_f32_cuda(const float *                                x,
 
     while (nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE) nth *= 2;
     const dim3 block_dims(nth,     1, 1);
-    const dim3 block_nums(params.ne01, params.ne02, params.ne03);
+
+    dim3 block_nums(params.ne01, params.ne02, params.ne03);
+
+    // gridDim.y/z are limited to 65535, put all rows in gridDim.x if they do not fit
+    if (params.ne02 > UINT16_MAX || params.ne03 > UINT16_MAX) {
+        GGML_ASSERT(params.nrows_x <= INT32_MAX);
+        block_nums = dim3(params.nrows_x, 1, 1);
+    }
+
     const size_t nbytes_shared = (GGML_PAD(ncols_x, WARP_SIZE) + WARP_SIZE)*sizeof(float);
     static_assert(CUDA_SOFT_MAX_BLOCK_SIZE == 1024, "These values need to be adjusted.");
 
@@ -434,6 +448,8 @@ void ggml_cuda_op_soft_max(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     params.ne01 = src0->ne[1];
     params.ne02 = src0->ne[2];
     params.ne03 = src0->ne[3];
+    params.ne01_fd = init_fastdiv_values((uint32_t) src0->ne[1]);
+    params.ne02_fd = init_fastdiv_values((uint32_t) src0->ne[2]);
     params.nb11 = nb11;
     params.nb12 = nb12;
     params.nb13 = nb13;
